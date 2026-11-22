@@ -1,0 +1,12 @@
+MANISH VAULT — ANTI-THEFT MODULE PLAN
+
+This preview lists the requested anti-theft features, but does not activate them.
+The native Android implementation must add and test:
+- Failed PIN attempt tracking and cooldown.
+- Intruder selfie only after camera permission and clear disclosure.
+- Opt-in location reporting to a verified owner account / paired device.
+- Theft alerts to a verified email or paired device.
+- Separate decoy vault PIN and isolated data store.
+- Emergency lock; remote lock/wipe only with authenticated owner confirmation.
+
+Do not rely on this browser preview to protect real files or locate a stolen phone.

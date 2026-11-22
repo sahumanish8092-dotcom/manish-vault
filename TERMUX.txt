@@ -1,0 +1,18 @@
+MANISH VAULT — PREVIEW SETUP IN TERMUX
+
+1) Install unzip if needed:
+   pkg update && pkg install unzip
+
+2) Extract the ZIP (replace the path with where you saved it):
+   mkdir -p ~/manish-vault
+   unzip /sdcard/Download/manish-vault-preview.zip -d ~/manish-vault
+
+3) Start a local preview server:
+   pkg install python
+   cd ~/manish-vault
+   python -m http.server 8080
+
+4) Open Chrome on the same phone:
+   http://127.0.0.1:8080
+
+This previews the UI. It does not install an APK. APK packaging and native Android security features are the next development stage. Never use this preview for real secrets.

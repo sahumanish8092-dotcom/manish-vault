@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#090a0d"><meta name="description" content="Manish Vault — private space for your files and notes"><title>Manish Vault</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">M<span>V</span></div><div><b>MANISH VAULT</b><small>PRIVATE SPACE</small></div></div>
+    <div class="nav-label">WORKSPACE</div>
+    <button class="nav active" data-view="home"><i>⌂</i> Overview</button>
+    <button class="nav" data-view="files"><i>▧</i> My Files <span class="nav-count" id="fileCount">0</span></button>
+    <button class="nav" data-view="notes"><i>▤</i> Secret Notes</button>
+    <button class="nav" data-view="passwords"><i>⚿</i> Passwords</button>
+    <div class="nav-label security-label">SECURITY</div>
+    <button class="nav" data-view="security"><i>⬡</i> Security Center</button>
+    <button class="nav" data-view="antitheft"><i>⌖</i> Anti-Theft Protection</button>
+    <div class="side-bottom"><div class="secure-card"><div class="secure-icon">✦</div><b>Your privacy matters</b><p>Files stay in this browser on this device.</p><span><em></em> LOCAL STORAGE</span></div><div class="profile"><div class="avatar">M</div><div><b>Manish</b><small>Vault owner</small></div><span class="dots">•••</span></div></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="mobile-brand"><div class="brand-mark">M<span>V</span></div><b>MANISH VAULT</b></div><div class="crumb">Workspace <span>/</span> <b id="crumb">Overview</b></div><div class="top-actions"><div class="status"><em></em> DEVICE PROTECTED</div><button class="icon-btn" id="lockBtn" title="Lock vault">♙</button></div></header>
+    <section class="content" id="content">
+      <div class="welcome"><div><div class="eyebrow">SUNDAY, NOVEMBER 22, 2026 <span>•</span> YOUR PRIVATE SPACE</div><h1>Good day, Manish <span>✦</span></h1><p>Everything private. Everything in one place.</p></div><button class="gold-btn" id="quickAdd">＋ Add new</button></div>
+      <div class="hero-card"><div class="hero-glow"></div><div class="hero-copy"><div class="hero-tag"><span>✦</span> PRIVATE VAULT</div><h2>Your world.<br><i>Your privacy.</i></h2><p>A personal space designed to keep your important things close and private.</p><button class="outline-btn" data-go="security">Explore security <b>↗</b></button></div><div class="vault-art"><div class="orbit orbit1"></div><div class="orbit orbit2"></div><div class="vault-circle"><div class="vault-shackle"></div><div class="vault-body"><div class="vault-key">✦</div></div></div><div class="spark s1">✧</div><div class="spark s2">✦</div><div class="spark s3">·</div></div><div class="hero-foot"><span><em></em> PRIVATE BY DESIGN</span><span> AES-GCM READY <b>◆</b></span></div></div>
+      <div class="section-head"><div><h3>Your vault at a glance</h3><p>A quick look at your private space</p></div><span class="live-pill"><em></em> LIVE</span></div>
+      <div class="stats"><article class="stat"><div class="stat-top"><span class="stat-icon gold">▧</span><span class="stat-trend">YOUR SPACE</span></div><strong id="statFiles">0</strong><label>Private files</label><div class="stat-line"><span style="width:12%"></span></div></article><article class="stat"><div class="stat-top"><span class="stat-icon purple">▤</span><span class="stat-trend">PERSONAL</span></div><strong id="statNotes">0</strong><label>Secret notes</label><div class="stat-line purple-line"><span style="width:8%"></span></div></article><article class="stat"><div class="stat-top"><span class="stat-icon blue">⚿</span><span class="stat-trend">LOCKED</span></div><strong id="statPasswords">0</strong><label>Saved logins</label><div class="stat-line blue-line"><span style="width:8%"></span></div></article><article class="stat"><div class="stat-top"><span class="stat-icon green">⬡</span><span class="stat-trend">STATUS</span></div><strong class="protected">Preview</strong><label>Vault status</label><div class="status-bottom"><em></em> This device</div></article></div>
+      <div class="lower-grid"><section class="panel recent"><div class="panel-head"><div><h3>Recently added</h3><p>Your latest private items</p></div><button class="text-btn" data-go="files">View all ↗</button></div><div id="recentList" class="empty-state"><div class="empty-icon">▧</div><b>Your vault is ready</b><p>Add your first private file, note or login.</p><button class="small-gold" id="emptyAdd">＋ Add something</button></div></section><section class="panel security-panel"><div class="panel-head"><div><h3>Security overview</h3><p>Your privacy checklist</p></div><span class="shield">⬡</span></div><div class="security-row"><span class="check">✓</span><div><b>Local-first storage</b><small>Data stays on this device</small></div><span class="done">ON</span></div><div class="security-row"><span class="check">✓</span><div><b>Vault lock</b><small>PIN protected session</small></div><span class="done">ON</span></div><div class="security-row"><span class="pending">＋</span><div><b>Biometric unlock</b><small>Native app integration needed</small></div><span class="later">NEXT</span></div><button class="security-link" data-go="security">Review security settings <b>→</b></button></section></div>
+      <footer>MANISH VAULT <span>•</span> YOUR PRIVACY, YOUR CONTROL <span class="footer-right">VERSION 0.1 PREVIEW</span></footer>
+    </section>
+  </main>
+</div>
+<div class="modal-backdrop" id="modal"><div class="modal"><button class="modal-x" id="modalClose">×</button><div class="modal-mark">✦</div><div class="eyebrow">WELCOME TO YOUR PRIVATE SPACE</div><h2 id="modalTitle">Create your vault</h2><p id="modalDesc">Set a PIN to protect this vault on this device.</p><form id="pinForm"><label for="pinInput">VAULT PIN</label><input id="pinInput" type="password" inputmode="numeric" minlength="4" maxlength="12" placeholder="Enter 4–12 digit PIN" required><div class="form-error" id="pinError"></div><button class="gold-btn full" type="submit" id="pinSubmit">Create secure vault →</button></form><small class="modal-note">Preview build: do not store real secrets yet. This browser demo is not a security-audited vault.</small></div></div>
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body></html>
