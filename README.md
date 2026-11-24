@@ -18,7 +18,7 @@ The original `.swb` file and every original activity/layout source were not pres
 - Biometric unlock through Android's system biometric prompt on supported devices.
 - Password reset only after confirming the Android device screen lock.
 - Import files, photos, and videos through Android's system document picker.
-- Imported items are copied into the app's private internal storage under `VaultFiles/`.
+- Imported items are copied into the app's private internal storage under `VaultFiles/` and the current implementation encrypts stored vault files using AES-GCM with an Android Keystore-managed key.
 - Folders, Notes, Recent items, Favorites, Search, Recycle Bin, Restore, Rename, and permanent deletion.
 - About Phone and basic security settings.
 - A GitHub Actions workflow that builds a debug APK and publishes it as a downloadable workflow artifact.
@@ -27,7 +27,7 @@ The original `.swb` file and every original activity/layout source were not pres
 
 Imported files are stored in the app's private internal storage, which is isolated from ordinary apps by Android. This build does **not** encrypt file contents at rest. Do not treat it as a professionally audited password manager or a replacement for an encrypted backup. Uninstalling the app or clearing its storage deletes its private vault data.
 
-No remote wipe, location tracking, SIM monitoring, or hidden camera feature is included in this rebuild. Those features need separate, explicit permissions, user-visible controls, and careful testing.
+Remote wipe, theft-location alerts, SIM-change monitoring, trusted-device remote control, and intruder selfie capture are not included in this build. These require additional implementation; remote actions also require a configured backend. No covert camera capture is provided.
 
 ## Build locally
 
@@ -50,12 +50,7 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## Build using GitHub Actions (recommended for a phone-only workflow)
 
-1. Create a new empty GitHub repository.
-2. Upload the contents of this ZIP to the repository root, or clone the repository in Horus and copy these files into it.
-3. Commit and push the project to the `main` branch.
-4. Open the repository's **Actions** tab and select **Build Manish Vault 2.0 APK**.
-5. When the run finishes, open it and download the artifact named `Manish-Vault-2.0-debug-APK`.
-6. Extract the artifact and install `app-debug.apk` on your Android phone. Android may ask you to allow installation from the app used to open the APK.
+The connected repository already contains this workflow. Push a commit to `manish-vault-2.0` or use **Actions → Build Manish Vault 2.0 APK → Run workflow**. When the run finishes, download the `Manish-Vault-2.0-debug-APK` artifact, extract it, and install `app-debug.apk` on your Android phone.
 
 Example Git commands after creating the empty GitHub repository (replace the URL with your own):
 
