@@ -424,6 +424,35 @@ public class MainActivity extends Activity {
                 }).show();
     }
 
+    private SecretKey getVaultKey() throws Exception {
+        java.security.KeyStore ks = java.security.KeyStore.getInstance("AndroidKeyStore"); ks.load(null);
+        java.security.Key key = ks.getKey(KEYSTORE_ALIAS, null); if (key instanceof SecretKey) return (SecretKey) key;
+        KeyGenerator g = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+        g.init(new KeyGenParameterSpec.Builder(KEYSTORE_ALIAS, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).setKeySize(256).build());
+        return g.generateKey();
+    }
+    private boolean isEncryptedFile(File f) throws Exception {
+        if (f.length() < ENCRYPTED_MAGIC.length) return false; byte[] h = new byte[ENCRYPTED_MAGIC.length];
+        try (FileInputStream in = new FileInputStream(f)) { return in.read(h) == h.length && Arrays.equals(h, ENCRYPTED_MAGIC); }
+    }
+    private void encryptStream(InputStream in, File dest) throws Exception {
+        byte[] iv = new byte[GCM_IV_BYTES]; new SecureRandom().nextBytes(iv); Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+        c.init(Cipher.ENCRYPT_MODE, getVaultKey(), new GCMParameterSpec(GCM_TAG_BITS, iv));
+        try (FileOutputStream raw = new FileOutputStream(dest)) { raw.write(ENCRYPTED_MAGIC); raw.write(iv);
+            try (CipherOutputStream out = new CipherOutputStream(raw, c)) { byte[] b = new byte[16384]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); }
+        }
+    }
+    private InputStream decryptingInput(File f) throws Exception {
+        FileInputStream raw = new FileInputStream(f); byte[] h = new byte[ENCRYPTED_MAGIC.length];
+        if (raw.read(h) != h.length || !Arrays.equals(h, ENCRYPTED_MAGIC)) { raw.close(); return new FileInputStream(f); }
+        byte[] iv = new byte[GCM_IV_BYTES]; int off=0; while(off<iv.length){int n=raw.read(iv,off,iv.length-off);if(n<0){raw.close();throw new java.io.IOException("Bad encrypted header");}off+=n;}
+        Cipher c=Cipher.getInstance("AES/GCM/NoPadding"); c.init(Cipher.DECRYPT_MODE,getVaultKey(),new GCMParameterSpec(GCM_TAG_BITS,iv)); return new CipherInputStream(raw,c);
+    }
+    private byte[] readDecrypted(File f) throws Exception { try(InputStream in=decryptingInput(f);java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream()){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return out.toByteArray();} }
+    private void writeEncrypted(File f, byte[] data) throws Exception { try(InputStream in=new java.io.ByteArrayInputStream(data)){encryptStream(in,f);} }
+    private void migratePlaintextFilesAsync() { new Thread(() -> { int n=migrateDirectory(vaultRoot)+migrateDirectory(notesRoot)+migrateDirectory(trashRoot); if(n>0)runOnUiThread(()->logSecurityEvent("Encrypted "+n+" existing items")); },"vault-migration").start(); }
+    private int migrateDirectory(File dir) { int count=0; File[] files=dir.listFiles(); if(files==null)return 0; for(File f:files){if(f.isDirectory()){count+=migrateDirectory(f);continue;} try{if(!isEncryptedFile(f)){File tmp=new File(f.getParentFile(),f.getName()+".encrypting");try(InputStream in=new FileInputStream(f)){encryptStream(in,tmp);}if(tmp.renameTo(f))count++;else tmp.delete();}}catch(Exception e){runOnUiThread(()->logSecurityEvent("An item could not be encrypted"));}}return count; }
+
     private void renderSettings() {
         LinearLayout page = createPage("SECURITY SETTINGS", PURPLE);
         addRow(page, "🔑  Change master password", "Update your vault password", CYAN,
@@ -656,7 +685,9 @@ public class MainActivity extends Activity {
     private void openStoredFile(File file) {
         try {
             String mime=getMimeType(file.getName());
-            Uri uri=FileProvider.getUriForFile(this,"com.manish.vault.fileprovider",file);
+            File preview = new File(getCacheDir(), "preview_" + System.currentTimeMillis() + "_" + file.getName());
+            try (InputStream in = decryptingInput(file); FileOutputStream out = new FileOutputStream(preview)) { byte[] buffer=new byte[16384]; int n; while((n=in.read(buffer))!=-1)out.write(buffer,0,n); }
+            Uri uri=FileProvider.getUriForFile(this,"com.manish.vault.fileprovider",preview);
             Intent intent=new Intent(Intent.ACTION_VIEW); intent.setDataAndType(uri,mime); intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(intent);
         } catch(Exception e) { new AlertDialog.Builder(this).setTitle(file.getName()).setMessage("Saved in private vault storage.\n"+humanSize(file.length())+"\n\nNo compatible viewer was found.") .setPositiveButton("OK",null).show(); }
