@@ -38,6 +38,9 @@ import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.BufferedInputStream;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -51,6 +54,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import javax.crypto.SecretKeyFactory;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import javax.crypto.spec.PBEKeySpec;
 
 /**
@@ -73,6 +82,10 @@ public class MainActivity extends Activity {
     private static final String KEY_SECURITY_LOG = "security_log";
     private static final int MAX_FAILED_LOGINS = 5;
     private static final long LOGIN_LOCK_MS = 30_000L;
+    private static final String KEYSTORE_ALIAS = "ManishVaultDataKeyV2";
+    private static final byte[] ENCRYPTED_MAGIC = new byte[]{77,86,76,84,50,69,78,67};
+    private static final int GCM_TAG_BITS = 128;
+    private static final int GCM_IV_BYTES = 12;
 
     private static final int BG = Color.rgb(3, 8, 18);
     private static final int PANEL = Color.rgb(8, 20, 35);
@@ -100,6 +113,8 @@ public class MainActivity extends Activity {
         notesRoot = new File(getFilesDir(), "VaultNotes");
         trashRoot = new File(getFilesDir(), "VaultTrash");
         vaultRoot.mkdirs(); notesRoot.mkdirs(); trashRoot.mkdirs();
+        ensureEncryptionKey();
+        migratePlaintextFilesAsync();
         if (!prefs.contains(KEY_HASH)) showCredentialDialog(true);
         else showLogin();
     }
@@ -514,10 +529,7 @@ public class MainActivity extends Activity {
             File destination = uniqueFile(destinationDir, name);
             InputStream in = getContentResolver().openInputStream(uri);
             if (in == null) throw new IllegalStateException("Unable to read selected file");
-            FileOutputStream out = new FileOutputStream(destination);
-            byte[] buffer = new byte[16384]; int n;
-            while ((n=in.read(buffer))!=-1) out.write(buffer,0,n);
-            out.flush(); out.close(); in.close();
+            try (InputStream source = in) { encryptStream(source, destination); }
             Toast.makeText(this,"Saved privately in Manish Vault",Toast.LENGTH_LONG).show();
             if (currentSection.equals("folder")) renderFolderContents(destinationDir); else openSection(currentSection);
         } catch (Exception e) { Toast.makeText(this,"Import failed: " + e.getMessage(),Toast.LENGTH_LONG).show(); }
@@ -617,13 +629,13 @@ public class MainActivity extends Activity {
     private void createNote() { editNote(null); }
     private void editNote(File existing) {
         EditText input=new EditText(this); input.setGravity(Gravity.TOP); input.setMinLines(8); input.setTextSize(15);
-        if(existing!=null) { try(FileInputStream in=new FileInputStream(existing)){byte[] b=new byte[(int)Math.min(existing.length(),1024*1024)];int n=in.read(b);if(n>0)input.setText(new String(b,0,n,java.nio.charset.StandardCharsets.UTF_8));}catch(Exception ignored){} }
+        if(existing!=null) { try { input.setText(new String(readDecrypted(existing), java.nio.charset.StandardCharsets.UTF_8)); } catch(Exception ignored){} }
         new AlertDialog.Builder(this).setTitle(existing==null?"New secret note":existing.getName()).setView(input).setNegativeButton("CANCEL",null).setPositiveButton("SAVE",(d,w)->{
             String body=input.getText().toString(); if(body.trim().isEmpty())return;
             try {
                 File target=existing;
                 if(target==null) target=uniqueFile(notesRoot,"Note_"+System.currentTimeMillis()+".txt");
-                try(FileOutputStream out=new FileOutputStream(target)){out.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+                writeEncrypted(target, body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 Toast.makeText(this,"Note saved privately",Toast.LENGTH_SHORT).show(); renderNotes();
             }catch(Exception e){Toast.makeText(this,"Could not save note",Toast.LENGTH_SHORT).show();}
         }).show();
