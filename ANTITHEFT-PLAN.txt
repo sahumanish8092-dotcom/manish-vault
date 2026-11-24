@@ -1,12 +1,20 @@
-MANISH VAULT — ANTI-THEFT MODULE PLAN
+MANISH VAULT 3.0 – SECURITY STATUS
 
-This preview lists the requested anti-theft features, but does not activate them.
-The native Android implementation must add and test:
-- Failed PIN attempt tracking and cooldown.
-- Intruder selfie only after camera permission and clear disclosure.
-- Opt-in location reporting to a verified owner account / paired device.
-- Theft alerts to a verified email or paired device.
-- Separate decoy vault PIN and isolated data store.
-- Emergency lock; remote lock/wipe only with authenticated owner confirmation.
+IMPLEMENTED IN THE CURRENT SOURCE
+- Failed PIN attempts, persistent cooldown and activity log.
+- Offline Recovery Key and Forgot PIN workflow.
+- Separate encrypted Decoy Vault, including decoy PIN rotation without replacing the decoy encryption key.
+- Manual last-known location capture after runtime permission, stored locally.
+- User-triggered share of a theft alert; no automatic data transfer.
+- Local theft-response flag, emergency lock, and temporary decrypted-preview cleanup.
+- RAM/app-heap and storage dashboard.
 
-Do not rely on this browser preview to protect real files or locate a stolen phone.
+NOT CONNECTED / FUTURE WORK
+- Remote lock/wipe and automatic notifications need a properly deployed authenticated backend and owner-device pairing.
+- SIM-change monitoring and camera-based intruder capture need separate compatibility, privacy and permission design; they are not silently activated.
+- Encrypted cloud backup, biometrics, push notifications and battery diagnostics need further implementation and device tests.
+
+SAFETY
+- No hidden camera/microphone recording, background tracking, automatic SMS or unauthenticated remote wipe.
+- Location is read only after the user taps the location control and grants permission.
+- Recovery Key is shown once. If both PIN and Recovery Key are lost, encrypted data is unrecoverable.

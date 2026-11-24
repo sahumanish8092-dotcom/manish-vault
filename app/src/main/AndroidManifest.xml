@@ -1,7 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Location is requested only after the user taps Record Last Known Location. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <application
         android:allowBackup="false"
-        android:label="Manish Vault"
+        android:label="Manish Vault 3.0"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
 

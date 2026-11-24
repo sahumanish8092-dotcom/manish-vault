@@ -1,6 +1,7 @@
 package com.manish.vault;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -8,6 +9,10 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationManager;
+import android.Manifest;
 import android.database.Cursor;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
@@ -21,6 +26,8 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.StatFs;
+import android.provider.Settings;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
@@ -43,6 +50,9 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.text.DateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.UUID;
@@ -79,6 +89,9 @@ public class MainActivity extends Activity {
     private boolean pickerActive = false;
     private long backgroundAt = 0L;
     private String currentPage = "home";
+    private boolean decoyMode = false;
+    private static final int REQ_LOCATION = 4103;
+    private static final int RECOVERY_ITERATIONS = 240000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -146,12 +159,15 @@ public class MainActivity extends Activity {
             for (int i = 0; i < masterKey.length; i++) masterKey[i] = 0;
             masterKey = null;
         }
+        decoyMode = false;
         File previews = new File(getCacheDir(), "vault_previews");
         deleteTree(previews);
     }
 
     private void lockVault() {
+        if (masterKey != null) logEvent(decoyMode ? "Decoy vault locked" : "Vault locked");
         clearMasterKey();
+        decoyMode = false;
         showLockScreen();
     }
 
@@ -192,13 +208,20 @@ public class MainActivity extends Activity {
         center.addView(access, accessParams);
         access.setOnClickListener(v -> handlePin(pin.getText().toString()));
 
-        TextView hint = text("PRIVATE • ENCRYPTED • LOCAL STORAGE", 11, MUTED, true);
+        TextView hint = text("PRIVATE • AES-256-GCM • LOCAL ENCRYPTION", 11, MUTED, true);
         hint.setGravity(Gravity.CENTER);
-        hint.setPadding(0, dp(28), 0, 0);
+        hint.setPadding(0, dp(25), 0, 0);
         center.addView(hint, matchWrap());
-        TextView reminder = text("Remember your PIN. It cannot be recovered if forgotten.", 10, MUTED, false);
+        Button forgot = smallButton("FORGOT PIN?  •  RECOVERY KEY");
+        LinearLayout.LayoutParams forgotParams = matchWrap();
+        forgotParams.setMargins(0, dp(17), 0, 0);
+        center.addView(forgot, forgotParams);
+        forgot.setOnClickListener(v -> showForgotPinDialog());
+        TextView reminder = text(prefs.contains("wrapped_master_recovery")
+                ? "Use your saved Recovery Key if you forget this PIN."
+                : "Set up a Recovery Key inside Security Center before forgetting your PIN.", 10, MUTED, false);
         reminder.setGravity(Gravity.CENTER);
-        reminder.setPadding(dp(8), dp(12), dp(8), 0);
+        reminder.setPadding(dp(8), dp(10), dp(8), 0);
         center.addView(reminder, matchWrap());
         setContentView(page);
     }
@@ -208,35 +231,85 @@ public class MainActivity extends Activity {
             toast("Enter exactly 6 digits");
             return;
         }
+        long remaining = prefs.getLong("lockout_until", 0L) - System.currentTimeMillis();
+        if (remaining > 0L) {
+            toast("Too many attempts. Try again in " + ((remaining + 999L) / 1000L) + " seconds.");
+            return;
+        }
         try {
             if (!prefs.contains("pin_hash")) {
                 byte[] pinSalt = randomBytes(16);
-                String pinSaltText = b64(pinSalt);
                 byte[] pinHash = derive(pin, pinSalt, PIN_ITERATIONS);
-                prefs.edit().putString("pin_salt", pinSaltText).putString("pin_hash", b64(pinHash)).apply();
+                prefs.edit().putString("pin_salt", b64(pinSalt)).putString("pin_hash", b64(pinHash)).apply();
                 createAndWrapMasterKey(pin);
-                toast("Vault PIN created");
+                resetFailedAttempts();
+                logEvent("Vault created");
+                toast("Vault PIN created. Set up Recovery Key in Security Center.");
             } else {
                 byte[] salt = Base64Compat.decode(prefs.getString("pin_salt", ""));
                 byte[] expected = Base64Compat.decode(prefs.getString("pin_hash", ""));
                 byte[] actual = derive(pin, salt, PIN_ITERATIONS);
                 if (!MessageDigest.isEqual(expected, actual)) {
+                    if (tryUnlockDecoy(pin)) {
+                        resetFailedAttempts();
+                        logEvent("Decoy vault unlocked");
+                        showHomeScreen();
+                        return;
+                    }
+                    recordFailedAttempt();
                     toast("Incorrect PIN");
                     return;
                 }
+                decoyMode = false;
                 if (!prefs.contains("wrapped_master")) {
-                    // Upgrade existing installs created by the first Manish Vault version.
+                    // Upgrade a very early install without changing its existing PIN hash.
                     createAndWrapMasterKey(pin);
                     toast("Vault encryption enabled for this install");
                 } else {
                     unlockMasterKey(pin);
                 }
+                resetFailedAttempts();
+                logEvent("Vault unlocked");
             }
             showHomeScreen();
         } catch (Exception e) {
             clearMasterKey();
-            toast("Could not unlock vault. Your encrypted data was not changed.");
+            decoyMode = false;
+            toast("Could not unlock vault. Encrypted data was not changed.");
         }
+    }
+
+    private void recordFailedAttempt() {
+        int count = prefs.getInt("failed_pin_count", 0) + 1;
+        long delay = 0L;
+        if (count >= 3) {
+            int exponent = Math.min(count - 3, 5);
+            delay = Math.min(300000L, 15000L * (1L << exponent));
+        }
+        long until = delay == 0L ? 0L : System.currentTimeMillis() + delay;
+        prefs.edit().putInt("failed_pin_count", count).putLong("lockout_until", until).apply();
+        logEvent("Incorrect PIN attempt #" + count);
+    }
+
+    private void resetFailedAttempts() {
+        prefs.edit().putInt("failed_pin_count", 0).putLong("lockout_until", 0L).apply();
+    }
+
+    private boolean tryUnlockDecoy(String pin) throws Exception {
+        if (!prefs.contains("decoy_pin_hash")) return false;
+        byte[] salt = Base64Compat.decode(prefs.getString("decoy_pin_salt", ""));
+        byte[] actual = derive(pin, salt, PIN_ITERATIONS);
+        byte[] expected = Base64Compat.decode(prefs.getString("decoy_pin_hash", ""));
+        if (!MessageDigest.isEqual(expected, actual)) return false;
+        byte[] keySalt = Base64Compat.decode(prefs.getString("decoy_key_salt", ""));
+        byte[] wrappingKey = derive(pin, keySalt, WRAP_ITERATIONS);
+        byte[] wrapped = Base64Compat.decode(prefs.getString("decoy_wrapped_master", ""));
+        byte[] decoyKey = decryptBytes(wrapped, wrappingKey);
+        wipe(wrappingKey);
+        if (decoyKey.length != 32) throw new Exception("Invalid decoy key");
+        masterKey = decoyKey;
+        decoyMode = true;
+        return true;
     }
 
     private void createAndWrapMasterKey(String pin) throws Exception {
@@ -258,6 +331,7 @@ public class MainActivity extends Activity {
     }
 
     private void changePin(String newPin) throws Exception {
+        if (decoyMode) throw new Exception("Main PIN changes are unavailable in this session");
         byte[] pinSalt = randomBytes(16);
         byte[] keySalt = randomBytes(16);
         byte[] hash = derive(newPin, pinSalt, PIN_ITERATIONS);
@@ -266,6 +340,7 @@ public class MainActivity extends Activity {
         prefs.edit().putString("pin_salt", b64(pinSalt)).putString("pin_hash", b64(hash))
                 .putString("key_salt", b64(keySalt)).putString("wrapped_master", b64(wrapped)).apply();
         wipe(wrappingKey);
+        logEvent("Main vault PIN changed");
     }
 
     private byte[] derive(String pin, byte[] salt, int iterations) throws Exception {
@@ -379,6 +454,7 @@ public class MainActivity extends Activity {
         addHomeCard(column, "✎", "Secret Notes", "Private notes stored encrypted", this::showNotesScreen);
         addHomeCard(column, "♙", "Password Manager", "Encrypted account credentials", this::showPasswordsScreen);
         addHomeCard(column, "⬡", "Security Settings", "Change PIN and auto-lock", this::showSettingsScreen);
+        addHomeCard(column, "🛡", "Security Center", "Recovery, anti-theft, device health and activity", this::showSecurityCenter);
 
         TextView status = text("●  AES-GCM ENCRYPTION  •  DEVICE STORAGE", 10, MUTED, true);
         status.setGravity(Gravity.CENTER);
@@ -494,7 +570,7 @@ public class MainActivity extends Activity {
             return false;
         }
         String id = UUID.randomUUID().toString();
-        File dir = new File(getFilesDir(), "vault_data");
+        File dir = currentVaultDataDir();
         if (!dir.exists() && !dir.mkdirs()) { toast("Could not create secure storage"); return false; }
         File encryptedFile = new File(dir, id + ".mvault");
         byte[] iv = randomBytes(IV_LENGTH);
@@ -522,6 +598,7 @@ public class MainActivity extends Activity {
             store.put("files", files);
             saveStore(store);
             toast("Encrypted and saved: " + name);
+            logEvent("Encrypted file imported");
             return true;
         } catch (Exception e) {
             encryptedFile.delete();
@@ -595,7 +672,7 @@ public class MainActivity extends Activity {
 
     private void openEncryptedFile(String id, String name, String mime, boolean share) {
         try {
-            File encrypted = new File(new File(getFilesDir(), "vault_data"), id + ".mvault");
+            File encrypted = new File(currentVaultDataDir(), id + ".mvault");
             if (!encrypted.exists()) { toast("Encrypted file is missing"); return; }
             File tempDir = new File(getCacheDir(), "vault_previews");
             if (!tempDir.exists() && !tempDir.mkdirs()) throw new Exception("cache");
@@ -649,7 +726,7 @@ public class MainActivity extends Activity {
                 .setNegativeButton("CANCEL", null)
                 .setPositiveButton("DELETE", (d, w) -> {
                     try {
-                        new File(new File(getFilesDir(), "vault_data"), id + ".mvault").delete();
+                        new File(currentVaultDataDir(), id + ".mvault").delete();
                         JSONObject store = loadStore();
                         JSONArray old = store.optJSONArray("files");
                         JSONArray keep = new JSONArray();
@@ -660,13 +737,14 @@ public class MainActivity extends Activity {
                         store.put("files", keep);
                         saveStore(store);
                         if ("media".equals(currentPage)) showMediaScreen(); else showDocumentsScreen();
+                        logEvent("Encrypted file deleted");
                         toast("File deleted from vault");
                     } catch (Exception e) { toast("Could not delete file record"); }
                 }).show();
     }
 
     private JSONObject loadStore() throws Exception {
-        File file = new File(getFilesDir(), "vault_store.enc");
+        File file = currentStoreFile();
         if (!file.exists()) {
             JSONObject empty = new JSONObject();
             empty.put("files", new JSONArray());
@@ -686,10 +764,10 @@ public class MainActivity extends Activity {
     private void saveStore(JSONObject store) throws Exception {
         byte[] plain = store.toString().getBytes("UTF-8");
         byte[] encrypted = encryptBytes(plain, masterKey);
-        File temp = new File(getFilesDir(), "vault_store.tmp");
+        File temp = new File(getFilesDir(), decoyMode ? "decoy_store.tmp" : "vault_store.tmp");
         try (FileOutputStream out = new FileOutputStream(temp)) { out.write(encrypted); out.flush(); out.getFD().sync(); }
-        File target = new File(getFilesDir(), "vault_store.enc");
-        File backup = new File(getFilesDir(), "vault_store.bak");
+        File target = currentStoreFile();
+        File backup = new File(getFilesDir(), decoyMode ? "decoy_store.bak" : "vault_store.bak");
         if (backup.exists()) backup.delete();
         if (target.exists() && !target.renameTo(backup)) throw new Exception("Cannot stage old vault data");
         if (!temp.renameTo(target)) {
@@ -755,7 +833,7 @@ public class MainActivity extends Activity {
                 JSONArray notes = store.optJSONArray("notes"); if (notes == null) notes = new JSONArray();
                 JSONObject record = new JSONObject(); record.put("title", t); record.put("body", b); record.put("updated", System.currentTimeMillis());
                 if (existing == null) notes.put(record); else notes.put(index, record);
-                store.put("notes", notes); saveStore(store); dialog.dismiss(); showNotesScreen(); toast("Note saved encrypted");
+                store.put("notes", notes); saveStore(store); logEvent("Secret note saved or edited"); dialog.dismiss(); showNotesScreen(); toast("Note saved encrypted");
             } catch (Exception e) { toast("Could not save note"); }
         }));
         dialog.show();
@@ -797,6 +875,7 @@ public class MainActivity extends Activity {
                 .setNegativeButton("CLOSE", null).setPositiveButton("COPY", (d, w) -> {
                     ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
                     clipboard.setPrimaryClip(ClipData.newPlainText("Vault password", password));
+                    logEvent("Password copied to clipboard");
                     toast("Copied. Clipboard will clear in 30 seconds.");
                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                         try {
@@ -830,7 +909,7 @@ public class MainActivity extends Activity {
                 JSONObject store = loadStore(); JSONArray list = store.optJSONArray("passwords"); if (list == null) list = new JSONArray();
                 JSONObject record = new JSONObject(); record.put("service", s); record.put("username", u); record.put("password", p); record.put("updated", System.currentTimeMillis());
                 if (existing == null) list.put(record); else list.put(index, record);
-                store.put("passwords", list); saveStore(store); dialog.dismiss(); showPasswordsScreen(); toast("Password saved encrypted");
+                store.put("passwords", list); saveStore(store); logEvent("Password entry saved or edited"); dialog.dismiss(); showPasswordsScreen(); toast("Password saved encrypted");
             } catch (Exception e) { toast("Could not save password"); }
         }));
         dialog.show();
@@ -842,19 +921,34 @@ public class MainActivity extends Activity {
                     try {
                         JSONObject store = loadStore(); JSONArray old = store.optJSONArray(key); JSONArray keep = new JSONArray();
                         if (old != null) for (int i = 0; i < old.length(); i++) if (i != index) keep.put(old.get(i));
-                        store.put(key, keep); saveStore(store); refresh.run(); toast("Deleted");
+                        store.put(key, keep); saveStore(store); logEvent("Vault record deleted: " + key); refresh.run(); toast("Deleted");
                     } catch (Exception e) { toast("Could not delete item"); }
                 }).show();
     }
 
     private void showSettingsScreen() {
         LinearLayout body = startSubPage("settings", "SECURITY SETTINGS", "Manage how this vault is protected");
+        if (decoyMode) {
+            LinearLayout card = cardColumn(body);
+            card.addView(text("PRIVACY SETTINGS", 16, WHITE, true), matchWrap());
+            card.addView(text("Only general session controls are available in this view.", 12, MUTED, false), matchWrap());
+            Button clear = primaryButton("CLEAR TEMPORARY FILES"); card.addView(clear, matchWrap());
+            clear.setOnClickListener(v -> { deleteTree(new File(getCacheDir(), "vault_previews")); toast("Temporary files cleared"); });
+            Button lock = primaryButton("LOCK VAULT");
+            LinearLayout.LayoutParams lp = matchWrap(); lp.setMargins(0, dp(10), 0, 0); card.addView(lock, lp);
+            lock.setOnClickListener(v -> lockVault());
+            return;
+        }
         LinearLayout pinCard = cardColumn(body);
         pinCard.addView(text("CHANGE SECURITY PIN", 16, WHITE, true), matchWrap());
         TextView pinDesc = text("Replace your 6-digit PIN. Your vault encryption key will be re-wrapped.", 12, MUTED, false);
         pinDesc.setPadding(0, dp(6), 0, dp(12)); pinCard.addView(pinDesc, matchWrap());
         Button change = primaryButton("CHANGE PIN"); pinCard.addView(change, matchWrap());
         change.setOnClickListener(v -> showChangePinDialog());
+        Button security = smallButton("OPEN ADVANCED SECURITY CENTER");
+        LinearLayout.LayoutParams securityP = matchWrap(); securityP.setMargins(0, dp(10), 0, 0);
+        pinCard.addView(security, securityP);
+        security.setOnClickListener(v -> showSecurityCenter());
 
         LinearLayout lockCard = cardColumn(body);
         lockCard.addView(text("AUTO-LOCK TIMER", 16, WHITE, true), matchWrap());
@@ -870,6 +964,440 @@ public class MainActivity extends Activity {
         Button clear = smallButton("CLEAR TEMPORARY DECRYPTED FILES");
         LinearLayout.LayoutParams clearP = matchWrap(); clearP.setMargins(0, dp(12), 0, 0); privacy.addView(clear, clearP);
         clear.setOnClickListener(v -> { deleteTree(new File(getCacheDir(), "vault_previews")); toast("Temporary preview files cleared"); });
+    }
+
+    // ---------- Version 3.0 security center ----------
+
+    private File currentVaultDataDir() {
+        return new File(getFilesDir(), decoyMode ? "decoy_data" : "vault_data");
+    }
+
+    private File currentStoreFile() {
+        return new File(getFilesDir(), decoyMode ? "decoy_store.enc" : "vault_store.enc");
+    }
+
+    private void logEvent(String message) {
+        try {
+            JSONArray log = new JSONArray(prefs.getString("security_log", "[]"));
+            JSONObject item = new JSONObject();
+            item.put("time", System.currentTimeMillis());
+            item.put("message", message);
+            log.put(item);
+            JSONArray trimmed = new JSONArray();
+            int start = Math.max(0, log.length() - 60);
+            for (int i = start; i < log.length(); i++) trimmed.put(log.get(i));
+            prefs.edit().putString("security_log", trimmed.toString()).apply();
+        } catch (Exception ignored) { }
+    }
+
+    private String timeLabel(long millis) {
+        if (millis <= 0L) return "Not recorded";
+        return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(new Date(millis));
+    }
+
+    private String hex(byte[] bytes) {
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) out.append(String.format(Locale.US, "%02X", b & 0xff));
+        return out.toString();
+    }
+
+    private String normalizeRecoveryCode(String code) {
+        return code == null ? "" : code.replaceAll("[\\s-]", "").toUpperCase(Locale.US);
+    }
+
+    private void setupRecoveryKey() {
+        if (masterKey == null || decoyMode) { toast("Open your main vault first"); return; }
+        if (prefs.contains("wrapped_master_recovery")) {
+            new AlertDialog.Builder(this).setTitle("Recovery Key is already set")
+                    .setMessage("For security, the full key is shown only once when created. You can replace it now, but the previous key will stop working.")
+                    .setNegativeButton("CANCEL", null)
+                    .setPositiveButton("REPLACE KEY", (d, w) -> generateRecoveryKey()).show();
+        } else {
+            generateRecoveryKey();
+        }
+    }
+
+    private void generateRecoveryKey() {
+        try {
+            byte[] random = randomBytes(16);
+            String code = hex(random);
+            byte[] salt = randomBytes(16);
+            byte[] wrappingKey = derive(code, salt, RECOVERY_ITERATIONS);
+            byte[] wrapped = encryptBytes(masterKey, wrappingKey);
+            wipe(wrappingKey);
+            prefs.edit().putString("recovery_salt", b64(salt))
+                    .putString("wrapped_master_recovery", b64(wrapped)).apply();
+            logEvent("Recovery Key created or replaced");
+            TextView value = text(code, 18, CYAN, true);
+            value.setTextIsSelectable(true);
+            value.setGravity(Gravity.CENTER);
+            value.setPadding(dp(8), dp(18), dp(8), dp(18));
+            new AlertDialog.Builder(this).setTitle("SAVE YOUR RECOVERY KEY")
+                    .setMessage("Write this 32-character key down and keep it somewhere safe. It is shown only now. Anyone with this key can recover the vault PIN.")
+                    .setView(value).setPositiveButton("I HAVE SAVED IT", (d, w) -> {
+                        new AlertDialog.Builder(this).setTitle("Confirm")
+                                .setMessage("Do not uninstall the app or clear app data before saving the key. If both PIN and Recovery Key are lost, encrypted data cannot be recovered.")
+                                .setPositiveButton("OK", null).show();
+                        showSecurityCenter();
+                    }).setNegativeButton("CLOSE", (d, w) -> showSecurityCenter()).show();
+        } catch (Exception e) {
+            toast("Could not create Recovery Key");
+        }
+    }
+
+    private void showForgotPinDialog() {
+        if (!prefs.contains("pin_hash")) {
+            toast("Create your vault PIN first");
+            return;
+        }
+        if (!prefs.contains("wrapped_master_recovery")) {
+            new AlertDialog.Builder(this).setTitle("Recovery is not set up")
+                    .setMessage("You must unlock the vault and create a Recovery Key in Security Center before forgetting your PIN. The existing 2.0 vault has no Recovery Key yet. Without the PIN, its encrypted data cannot be unlocked.")
+                    .setPositiveButton("OK", null).show();
+            return;
+        }
+        LinearLayout form = dialogForm();
+        EditText code = edit("32-character Recovery Key", false, false);
+        EditText next = edit("New 6-digit PIN", false, true);
+        EditText confirm = edit("Confirm new PIN", false, true);
+        code.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        next.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        confirm.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        form.addView(code, matchWrap()); form.addView(next, matchWrap()); form.addView(confirm, matchWrap());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Recover Manish Vault")
+                .setMessage("Enter the Recovery Key you saved earlier, then choose a new PIN.")
+                .setView(form).setNegativeButton("CANCEL", null).setPositiveButton("RECOVER", null).create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String recovery = normalizeRecoveryCode(code.getText().toString());
+            String a = next.getText().toString();
+            String b = confirm.getText().toString();
+            if (!recovery.matches("[0-9A-F]{32}")) { toast("Enter the complete 32-character Recovery Key"); return; }
+            if (!a.matches("[0-9]{6}") || !a.equals(b)) { toast("New PINs must match and contain 6 digits"); return; }
+            try {
+                byte[] salt = Base64Compat.decode(prefs.getString("recovery_salt", ""));
+                byte[] recoveryWrap = derive(recovery, salt, RECOVERY_ITERATIONS);
+                byte[] recovered = decryptBytes(Base64Compat.decode(prefs.getString("wrapped_master_recovery", "")), recoveryWrap);
+                wipe(recoveryWrap);
+                if (recovered.length != 32) throw new Exception("Recovery key invalid");
+                masterKey = recovered;
+                decoyMode = false;
+                changePin(a);
+                resetFailedAttempts();
+                logEvent("PIN recovered using Recovery Key");
+                dialog.dismiss();
+                showHomeScreen();
+                toast("PIN recovered. Your encrypted vault data is unchanged.");
+            } catch (Exception e) {
+                clearMasterKey();
+                toast("Recovery Key is incorrect or damaged");
+            }
+        }));
+        dialog.show();
+    }
+
+    private void setupDecoyVault() {
+        if (masterKey == null || decoyMode) { toast("Open your main vault first"); return; }
+        boolean updating = prefs.contains("decoy_pin_hash");
+        LinearLayout form = dialogForm();
+        EditText oldPin = null;
+        if (updating) {
+            oldPin = edit("Current Decoy PIN", false, true);
+            oldPin.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+            form.addView(oldPin, matchWrap());
+        }
+        EditText pin = edit("New separate 6-digit Decoy PIN", false, true);
+        EditText confirm = edit("Confirm Decoy PIN", false, true);
+        pin.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        confirm.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        form.addView(pin, matchWrap()); form.addView(confirm, matchWrap());
+        final EditText oldPinField = oldPin;
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(updating ? "Replace Decoy PIN" : "Create Decoy Vault")
+                .setMessage(updating ? "The existing decoy encryption key and data will be retained." : "A separate encrypted storage area will be created. It will not contain your main vault files.")
+                .setView(form).setNegativeButton("CANCEL", null).setPositiveButton("SAVE", null).create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String a = pin.getText().toString();
+            String b = confirm.getText().toString();
+            if (!a.matches("[0-9]{6}") || !a.equals(b)) { toast("Decoy PINs must match and contain 6 digits"); return; }
+            try {
+                byte[] mainSalt = Base64Compat.decode(prefs.getString("pin_salt", ""));
+                byte[] mainHash = derive(a, mainSalt, PIN_ITERATIONS);
+                if (MessageDigest.isEqual(mainHash, Base64Compat.decode(prefs.getString("pin_hash", "")))) {
+                    toast("Decoy PIN must be different from the main PIN"); return;
+                }
+                byte[] key;
+                if (updating) {
+                    String old = oldPinField == null ? "" : oldPinField.getText().toString();
+                    byte[] oldSalt = Base64Compat.decode(prefs.getString("decoy_pin_salt", ""));
+                    byte[] oldHash = derive(old, oldSalt, PIN_ITERATIONS);
+                    if (!MessageDigest.isEqual(oldHash, Base64Compat.decode(prefs.getString("decoy_pin_hash", "")))) {
+                        toast("Current Decoy PIN is incorrect"); return;
+                    }
+                    byte[] oldKeySalt = Base64Compat.decode(prefs.getString("decoy_key_salt", ""));
+                    byte[] oldWrappingKey = derive(old, oldKeySalt, WRAP_ITERATIONS);
+                    key = decryptBytes(Base64Compat.decode(prefs.getString("decoy_wrapped_master", "")), oldWrappingKey);
+                    wipe(oldWrappingKey);
+                } else {
+                    key = randomBytes(32);
+                }
+                if (key.length != 32) throw new Exception("Invalid decoy key");
+                byte[] pinSalt = randomBytes(16);
+                byte[] keySalt = randomBytes(16);
+                byte[] pinHash = derive(a, pinSalt, PIN_ITERATIONS);
+                byte[] wrappingKey = derive(a, keySalt, WRAP_ITERATIONS);
+                byte[] wrapped = encryptBytes(key, wrappingKey);
+                wipe(wrappingKey);
+                File dir = new File(getFilesDir(), "decoy_data");
+                if (!dir.exists() && !dir.mkdirs()) throw new Exception("Cannot create decoy storage");
+                File decoyStore = new File(getFilesDir(), "decoy_store.enc");
+                if (!decoyStore.exists()) {
+                    JSONObject empty = emptyStore();
+                    byte[] encrypted = encryptBytes(empty.toString().getBytes("UTF-8"), key);
+                    try (FileOutputStream out = new FileOutputStream(decoyStore)) { out.write(encrypted); out.getFD().sync(); }
+                }
+                prefs.edit().putString("decoy_pin_salt", b64(pinSalt))
+                        .putString("decoy_pin_hash", b64(pinHash))
+                        .putString("decoy_key_salt", b64(keySalt))
+                        .putString("decoy_wrapped_master", b64(wrapped)).apply();
+                wipe(key);
+                logEvent(updating ? "Decoy Vault PIN replaced" : "Decoy Vault configured");
+                dialog.dismiss(); showSecurityCenter(); toast(updating ? "Decoy PIN changed; decoy data retained" : "Separate Decoy Vault is ready");
+            } catch (Exception e) { toast("Could not save Decoy Vault settings"); }
+        }));
+        dialog.show();
+    }
+
+    private JSONObject emptyStore() throws Exception {
+        JSONObject empty = new JSONObject();
+        empty.put("files", new JSONArray());
+        empty.put("notes", new JSONArray());
+        empty.put("passwords", new JSONArray());
+        return empty;
+    }
+
+    private void disableDecoyVault() {
+        new AlertDialog.Builder(this).setTitle("Delete Decoy Vault?")
+                .setMessage("This permanently deletes the separate decoy files, notes and passwords. Your main vault is not touched.")
+                .setNegativeButton("CANCEL", null).setPositiveButton("DELETE DECOY", (d, w) -> {
+                    deleteTree(new File(getFilesDir(), "decoy_data"));
+                    new File(getFilesDir(), "decoy_store.enc").delete();
+                    new File(getFilesDir(), "decoy_store.tmp").delete();
+                    new File(getFilesDir(), "decoy_store.bak").delete();
+                    prefs.edit().remove("decoy_pin_salt").remove("decoy_pin_hash")
+                            .remove("decoy_key_salt").remove("decoy_wrapped_master").apply();
+                    logEvent("Decoy Vault deleted"); showSecurityCenter(); toast("Decoy Vault deleted");
+                }).show();
+    }
+
+    private long directorySize(File file) {
+        if (file == null || !file.exists()) return 0L;
+        if (file.isFile()) return file.length();
+        long total = 0L;
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) total += directorySize(child);
+        return total;
+    }
+
+    private String formatBytes(long bytes) {
+        if (bytes < 1024L) return bytes + " B";
+        double value = bytes / 1024.0;
+        if (value < 1024.0) return String.format(Locale.US, "%.1f KB", value);
+        value /= 1024.0;
+        if (value < 1024.0) return String.format(Locale.US, "%.1f MB", value);
+        return String.format(Locale.US, "%.2f GB", value / 1024.0);
+    }
+
+    private String appMemorySummary() {
+        Runtime runtime = Runtime.getRuntime();
+        long used = runtime.totalMemory() - runtime.freeMemory();
+        long max = runtime.maxMemory();
+        ActivityManager manager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
+        if (manager != null) manager.getMemoryInfo(info);
+        return "App heap in use: " + formatBytes(used) + " / " + formatBytes(max)
+                + "\nDevice available RAM: " + formatBytes(info.availMem)
+                + "\nThis is a status monitor; Android manages system RAM automatically.";
+    }
+
+    private String storageSummary() {
+        StatFs stat = new StatFs(getFilesDir().getAbsolutePath());
+        long free = stat.getAvailableBytes();
+        long total = stat.getTotalBytes();
+        long app = directorySize(getFilesDir());
+        return "App private data: " + formatBytes(app)
+                + "\nDevice storage free: " + formatBytes(free)
+                + "\nDevice storage total: " + formatBytes(total);
+    }
+
+    private void requestOrRecordLocation() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+            return;
+        }
+        recordLastKnownLocation();
+    }
+
+    private void recordLastKnownLocation() {
+        try {
+            LocationManager manager = (LocationManager) getSystemService(LOCATION_SERVICE);
+            if (manager == null) { toast("Location service unavailable"); return; }
+            Location best = null;
+            String[] providers = new String[]{LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER};
+            for (String provider : providers) {
+                try {
+                    if (!manager.isProviderEnabled(provider)) continue;
+                    Location candidate = manager.getLastKnownLocation(provider);
+                    if (candidate != null && (best == null || candidate.getTime() > best.getTime())) best = candidate;
+                } catch (SecurityException ignored) { }
+            }
+            if (best == null) {
+                toast("No saved location yet. Turn on device Location and try again.");
+                return;
+            }
+            prefs.edit().putString("last_location_lat", Double.toString(best.getLatitude()))
+                    .putString("last_location_lon", Double.toString(best.getLongitude()))
+                    .putLong("last_location_time", best.getTime()).apply();
+            logEvent("Last known location recorded manually");
+            showSecurityCenter();
+            toast("Last known location saved on this phone only");
+        } catch (SecurityException e) { toast("Location permission was not granted"); }
+        catch (Exception e) { toast("Could not read device location"); }
+    }
+
+    private void shareTheftAlert() {
+        if (!prefs.contains("last_location_lat")) {
+            toast("Record a last known location first"); return;
+        }
+        String lat = prefs.getString("last_location_lat", "");
+        String lon = prefs.getString("last_location_lon", "");
+        long when = prefs.getLong("last_location_time", 0L);
+        String message = "Manish Vault device security alert. Last location recorded on this device at "
+                + timeLabel(when) + ": https://maps.google.com/?q=" + lat + "," + lon
+                + " . This location is not live and was not uploaded automatically.";
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_SUBJECT, "Manish Vault security alert");
+        send.putExtra(Intent.EXTRA_TEXT, message);
+        startActivity(Intent.createChooser(send, "Share security alert"));
+    }
+
+    private void markDeviceAsStolen() {
+        new AlertDialog.Builder(this).setTitle("Activate Theft Response?")
+                .setMessage("This marks the device as reported stolen locally, records an event, clears temporary previews and locks the vault. It does not contact a server or track the device in the background.")
+                .setNegativeButton("CANCEL", null).setPositiveButton("ACTIVATE", (d, w) -> {
+                    prefs.edit().putBoolean("theft_mode", true).apply();
+                    logEvent("Theft response activated locally");
+                    deleteTree(new File(getCacheDir(), "vault_previews"));
+                    lockVault();
+                    toast("Local theft response activated");
+                }).show();
+    }
+
+    private void clearTheftStatus() {
+        new AlertDialog.Builder(this).setTitle("Clear theft status?")
+                .setMessage("Confirm that you own this device and want to clear the local theft flag.")
+                .setNegativeButton("CANCEL", null).setPositiveButton("CLEAR", (d, w) -> {
+                    prefs.edit().putBoolean("theft_mode", false).apply();
+                    logEvent("Local theft status cleared"); showSecurityCenter();
+                }).show();
+    }
+
+    private void showActivityLog() {
+        try {
+            JSONArray log = new JSONArray(prefs.getString("security_log", "[]"));
+            StringBuilder body = new StringBuilder();
+            for (int i = log.length() - 1; i >= 0; i--) {
+                JSONObject item = log.getJSONObject(i);
+                body.append(timeLabel(item.optLong("time"))).append("\n")
+                        .append("• ").append(item.optString("message")).append("\n\n");
+            }
+            if (body.length() == 0) body.append("No security events recorded yet.");
+            TextView view = text(body.toString(), 12, MUTED, false);
+            view.setTextIsSelectable(true);
+            view.setPadding(dp(12), dp(12), dp(12), dp(12));
+            ScrollView scroll = new ScrollView(this); scroll.addView(view);
+            new AlertDialog.Builder(this).setTitle("SECURITY ACTIVITY • LAST 60 EVENTS")
+                    .setView(scroll).setPositiveButton("CLOSE", null).show();
+        } catch (Exception e) { toast("Could not read activity log"); }
+    }
+
+    private void showSecurityCenter() {
+        LinearLayout body = startSubPage("security", "ULTIMATE SECURITY CENTER", "Local security controls • consent-based features");
+        if (decoyMode) {
+            LinearLayout card = cardColumn(body);
+            card.addView(text("DEVICE STATUS", 16, WHITE, true), matchWrap());
+            card.addView(text(appMemorySummary() + "\n\n" + storageSummary(), 12, MUTED, false), matchWrap());
+            Button lock = primaryButton("EMERGENCY LOCK"); card.addView(lock, matchWrap());
+            lock.setOnClickListener(v -> lockVault());
+            return;
+        }
+
+        LinearLayout recovery = cardColumn(body);
+        recovery.addView(text("FORGOT PIN / RECOVERY", 16, WHITE, true), matchWrap());
+        recovery.addView(text(prefs.contains("wrapped_master_recovery")
+                ? "Recovery Key is configured. Save your key offline; it cannot be displayed again."
+                : "Not configured yet. Create and safely store a Recovery Key before you forget your PIN.", 12, MUTED, false), matchWrap());
+        Button recover = primaryButton(prefs.contains("wrapped_master_recovery") ? "REPLACE RECOVERY KEY" : "SET UP RECOVERY KEY");
+        recovery.addView(recover, matchWrap()); recover.setOnClickListener(v -> setupRecoveryKey());
+
+        LinearLayout decoy = cardColumn(body);
+        decoy.addView(text("SEPARATE DECOY VAULT", 16, WHITE, true), matchWrap());
+        decoy.addView(text(prefs.contains("decoy_pin_hash")
+                ? "Configured. Enter its separate PIN on the lock screen to open the decoy storage."
+                : "Not configured. The decoy vault uses a separate key and separate encrypted files.", 12, MUTED, false), matchWrap());
+        Button decoySetup = primaryButton(prefs.contains("decoy_pin_hash") ? "REPLACE DECOY PIN" : "CREATE DECOY VAULT");
+        decoy.addView(decoySetup, matchWrap()); decoySetup.setOnClickListener(v -> setupDecoyVault());
+        if (prefs.contains("decoy_pin_hash")) {
+            Button decoyDelete = smallButton("DELETE DECOY VAULT DATA");
+            LinearLayout.LayoutParams p = matchWrap(); p.setMargins(0, dp(8), 0, 0); decoy.addView(decoyDelete, p);
+            decoyDelete.setOnClickListener(v -> disableDecoyVault());
+        }
+
+        LinearLayout theft = cardColumn(body);
+        theft.addView(text("THEFT RESPONSE", 16, WHITE, true), matchWrap());
+        theft.addView(text("Wrong-PIN attempt log and cooldown are active. Last location is recorded only when you tap the button and grant permission. Sharing is always manual.", 12, MUTED, false), matchWrap());
+        Button location = primaryButton("RECORD LAST KNOWN LOCATION"); theft.addView(location, matchWrap());
+        location.setOnClickListener(v -> requestOrRecordLocation());
+        long locationTime = prefs.getLong("last_location_time", 0L);
+        String locationText = prefs.contains("last_location_lat")
+                ? "Saved locally: " + prefs.getString("last_location_lat", "") + ", " + prefs.getString("last_location_lon", "") + "\n" + timeLabel(locationTime)
+                : "No location has been recorded.";
+        TextView locationStatus = text(locationText, 11, MUTED, false); locationStatus.setPadding(0, dp(7), 0, dp(6)); theft.addView(locationStatus, matchWrap());
+        Button share = smallButton("SHARE THEFT ALERT MANUALLY"); theft.addView(share, matchWrap()); share.setOnClickListener(v -> shareTheftAlert());
+        Button mark = smallButton(prefs.getBoolean("theft_mode", false) ? "THEFT MODE ACTIVE • LOCK NOW" : "MARK DEVICE AS STOLEN / EMERGENCY LOCK");
+        LinearLayout.LayoutParams markP = matchWrap(); markP.setMargins(0, dp(8), 0, 0); theft.addView(mark, markP);
+        mark.setOnClickListener(v -> markDeviceAsStolen());
+        if (prefs.getBoolean("theft_mode", false)) {
+            Button clearTheft = smallButton("CLEAR LOCAL THEFT STATUS");
+            LinearLayout.LayoutParams clearP = matchWrap(); clearP.setMargins(0, dp(8), 0, 0); theft.addView(clearTheft, clearP);
+            clearTheft.setOnClickListener(v -> clearTheftStatus());
+        }
+
+        LinearLayout health = cardColumn(body);
+        health.addView(text("DEVICE RAM & STORAGE", 16, WHITE, true), matchWrap());
+        health.addView(text(appMemorySummary() + "\n\n" + storageSummary(), 12, MUTED, false), matchWrap());
+        Button refresh = smallButton("REFRESH DEVICE HEALTH");
+        LinearLayout.LayoutParams refreshP = matchWrap(); refreshP.setMargins(0, dp(9), 0, 0); health.addView(refresh, refreshP);
+        refresh.setOnClickListener(v -> showSecurityCenter());
+
+        LinearLayout logs = cardColumn(body);
+        logs.addView(text("SECURITY ACTIVITY LOG", 16, WHITE, true), matchWrap());
+        logs.addView(text("Last PIN failures, unlocks, recovery events, vault changes and local theft actions. Maximum 60 entries.", 12, MUTED, false), matchWrap());
+        Button viewLog = primaryButton("VIEW SECURITY ACTIVITY"); logs.addView(viewLog, matchWrap()); viewLog.setOnClickListener(v -> showActivityLog());
+
+        LinearLayout network = cardColumn(body);
+        network.addView(text("REMOTE PROTECTION STATUS", 16, WHITE, true), matchWrap());
+        network.addView(text("Remote lock, automatic theft notifications, cloud backup, SIM-change monitoring and camera capture are NOT connected in this build. They need a verified owner account/server or explicit platform permissions and a visible consent flow. No hidden tracking, silent camera capture or automatic data wipe is performed.", 12, MUTED, false), matchWrap());
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_LOCATION) {
+            boolean granted = false;
+            for (int result : grantResults) if (result == PackageManager.PERMISSION_GRANTED) granted = true;
+            if (granted) recordLastKnownLocation(); else toast("Location permission denied. Vault remains usable.");
+        }
     }
 
     private void showChangePinDialog() {
@@ -898,7 +1426,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < values.length; i++) if (values[i] == current) checked = i;
         final int initial = checked;
         new AlertDialog.Builder(this).setTitle("Auto-lock after").setSingleChoiceItems(labels, initial, (dialog, which) -> {
-            prefs.edit().putInt("auto_lock_seconds", values[which]).apply(); dialog.dismiss(); showSettingsScreen(); toast("Auto-lock updated");
+            prefs.edit().putInt("auto_lock_seconds", values[which]).apply(); logEvent("Auto-lock timer changed"); dialog.dismiss(); showSettingsScreen(); toast("Auto-lock updated");
         }).setNegativeButton("CANCEL", null).show();
     }
 
