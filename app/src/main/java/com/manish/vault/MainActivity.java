@@ -113,8 +113,6 @@ public class MainActivity extends Activity {
         notesRoot = new File(getFilesDir(), "VaultNotes");
         trashRoot = new File(getFilesDir(), "VaultTrash");
         vaultRoot.mkdirs(); notesRoot.mkdirs(); trashRoot.mkdirs();
-        try { getVaultKey(); } catch (Exception e) { logSecurityEvent("Encryption key initialization failed"); }
-        migratePlaintextFilesAsync();
         ensureEncryptionKey();
         migratePlaintextFilesAsync();
         if (!prefs.contains(KEY_HASH)) showCredentialDialog(true);
@@ -166,36 +164,50 @@ public class MainActivity extends Activity {
 
     private class VaultBridge {
         @JavascriptInterface public void login(String user, String password) {
-            runOnUiThread(() -> {
-                String savedUser = prefs.getString(KEY_USER, "");
-                String salt64 = prefs.getString(KEY_SALT, "");
-                String expected = prefs.getString(KEY_HASH, "");
+            final String enteredUser = user == null ? "" : user.trim();
+            final String enteredPassword = password == null ? "" : password;
+            new Thread(() -> {
                 long now = System.currentTimeMillis();
                 long lockUntil = prefs.getLong(KEY_LOCK_UNTIL, 0L);
                 if (now < lockUntil) {
                     long seconds = Math.max(1L, (lockUntil - now + 999L) / 1000L);
-                    Toast.makeText(MainActivity.this, "Vault temporarily locked. Try again in " + seconds + " seconds.", Toast.LENGTH_LONG).show();
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                            "Vault temporarily locked. Try again in " + seconds + " seconds.",
+                            Toast.LENGTH_LONG).show());
                     return;
                 }
-                if (user != null && password != null && user.trim().equals(savedUser)
-                        && verifyPassword(password, salt64, expected)) {
+                String savedUser = prefs.getString(KEY_USER, "");
+                String salt64 = prefs.getString(KEY_SALT, "");
+                String expected = prefs.getString(KEY_HASH, "");
+                boolean valid = !enteredPassword.isEmpty() && enteredUser.equals(savedUser)
+                        && verifyPassword(enteredPassword, salt64, expected);
+                if (valid) {
                     prefs.edit().putInt(KEY_FAILED_LOGINS, 0).putLong(KEY_LOCK_UNTIL, 0L).apply();
-                    logSecurityEvent("Successful password unlock");
-                    showHome();
+                    runOnUiThread(() -> {
+                        logSecurityEvent("Successful password unlock");
+                        showHome();
+                    });
                 } else {
                     int attempts = prefs.getInt(KEY_FAILED_LOGINS, 0) + 1;
                     SharedPreferences.Editor edit = prefs.edit().putInt(KEY_FAILED_LOGINS, attempts);
-                    if (attempts >= MAX_FAILED_LOGINS) {
+                    boolean locked = attempts >= MAX_FAILED_LOGINS;
+                    if (locked) {
                         edit.putInt(KEY_FAILED_LOGINS, 0).putLong(KEY_LOCK_UNTIL, now + LOGIN_LOCK_MS);
-                        logSecurityEvent("5 failed login attempts — 30 second lockout");
-                    } else {
-                        logSecurityEvent("Failed login attempt " + attempts + " of " + MAX_FAILED_LOGINS);
                     }
                     edit.apply();
-                    Toast.makeText(MainActivity.this, attempts >= MAX_FAILED_LOGINS ? "Too many attempts. Vault locked for 30 seconds." : "Wrong username or password", Toast.LENGTH_SHORT).show();
-                    if (webView != null) webView.evaluateJavascript("(function(){var t=document.getElementById('toast');if(t){t.textContent='INVALID LOGIN';t.classList.add('show');}})();", null);
+                    runOnUiThread(() -> {
+                        logSecurityEvent(locked ? "5 failed login attempts — 30 second lockout"
+                                : "Failed login attempt " + attempts + " of " + MAX_FAILED_LOGINS);
+                        Toast.makeText(MainActivity.this,
+                                locked ? "Too many attempts. Vault locked for 30 seconds."
+                                        : "Wrong username or password",
+                                Toast.LENGTH_SHORT).show();
+                        if (webView != null) webView.evaluateJavascript(
+                                "(function(){var t=document.getElementById('toast');if(t){t.textContent='INVALID LOGIN';t.classList.add('show');}})();",
+                                null);
+                    });
                 }
-            });
+            }, "vault-login-check").start();
         }
         @JavascriptInterface public void fingerprint() { runOnUiThread(MainActivity.this::startBiometric); }
         @JavascriptInterface public void forgotPassword() { runOnUiThread(MainActivity.this::forgotPassword); }
