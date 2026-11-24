@@ -1,0 +1,12 @@
+MANISH VAULT 2.0 REBUILD STATUS
+
+Project source: created
+Archived login HTML: included
+Archived home HTML: included
+Archived Sketchware FileActivity.java: included as reference
+Archived Sketchware SketchwareUtil.java: included as reference
+Android Gradle app shell: created
+GitHub Actions APK workflow: included
+Local APK compilation in this environment: not performed (Android SDK/Gradle are not configured here)
+
+This ZIP is a reconstructed Android Gradle project, not the original Sketchware .swb backup.
