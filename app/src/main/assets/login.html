@@ -15,7 +15,7 @@ body{display:flex;align-items:flex-start;justify-content:center;font-family:Aria
 }
 #scan{position:absolute;z-index:2;pointer-events:none;inset:0;pointer-events:none;opacity:.09;
  background:linear-gradient(transparent 0%,rgba(0,255,255,.2) 49%,transparent 51%);
- background-size:100% 32%;animation:scan 7s linear infinite}
+ background-size:100% 32%;animation:none}
 @keyframes scan{from{transform:translateY(-110%)}to{transform:translateY(310%)}}
 
 /* EXACT text-entry areas measured against the supplied picture */
@@ -50,14 +50,14 @@ body{display:flex;align-items:flex-start;justify-content:center;font-family:Aria
  radial-gradient(ellipse at 7% 78%,rgba(70,35,230,.30),transparent 24%),
  radial-gradient(ellipse at 93% 82%,rgba(120,25,225,.28),transparent 25%),
  radial-gradient(circle at 50% 27%,rgba(0,225,255,.13),transparent 25%);
- filter:blur(10px);animation:galaxyGlow 9s ease-in-out infinite alternate;
+ filter:blur(10px);animation:none;
 }
 #screen::after{
  content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
  background:
  radial-gradient(circle at 50% 24%,rgba(0,245,255,.10),transparent 22%),
  linear-gradient(115deg,rgba(0,220,255,.035),transparent 28%,rgba(180,50,255,.045) 70%,transparent);
- mix-blend-mode:screen;animation:lightPulse 5s ease-in-out infinite alternate;
+ mix-blend-mode:screen;animation:none;
 }
 @keyframes galaxyGlow{
  0%{transform:scale(1) rotate(0deg);filter:blur(10px) brightness(1)}
@@ -116,28 +116,7 @@ forgot.onclick=()=>{
 </script>
 
 <div id="ambient"></div>
-<script>
-(function(){
- const screen=document.getElementById('screen');
- const a=document.getElementById('ambient');
- Object.assign(a.style,{position:'absolute',inset:'0',pointerEvents:'none',zIndex:'0',overflow:'hidden'});
- for(let i=0;i<34;i++){
-   const s=document.createElement('i');
-   const size=(1+Math.random()*2.4);
-   s.style.cssText=`position:absolute;width:${size}px;height:${size}px;border-radius:50%;
-     left:${Math.random()*100}%;top:${Math.random()*100}%;
-     background:${Math.random()>.5?'#5ffaff':'#d66cff'};
-     box-shadow:0 0 ${4+Math.random()*9}px currentColor;
-     opacity:${.18+Math.random()*.48};`;
-   s.animate([
-     {transform:'translate(0,0) scale(.7)',opacity:.12},
-     {transform:`translate(${(Math.random()-.5)*22}px,${(Math.random()-.5)*28}px) scale(1.5)`,opacity:.72},
-     {transform:'translate(0,0) scale(.7)',opacity:.12}
-   ],{duration:3500+Math.random()*5000,iterations:Infinity,delay:-Math.random()*5000});
-   a.appendChild(s);
- }
-})();
-</script>
+<!-- Ambient particle animation removed to keep login typing responsive. -->
 
 </body>
 </html>
