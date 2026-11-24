@@ -426,6 +426,8 @@ public class MainActivity extends Activity {
                 }).show();
     }
 
+    private void ensureEncryptionKey() { try { getVaultKey(); } catch (Exception e) { logSecurityEvent("Encryption key initialization failed"); } }
+
     private SecretKey getVaultKey() throws Exception {
         java.security.KeyStore ks = java.security.KeyStore.getInstance("AndroidKeyStore"); ks.load(null);
         java.security.Key key = ks.getKey(KEYSTORE_ALIAS, null); if (key instanceof SecretKey) return (SecretKey) key;
