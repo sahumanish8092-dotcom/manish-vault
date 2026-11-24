@@ -68,6 +68,11 @@ public class MainActivity extends Activity {
     private static final String KEY_SALT = "salt";
     private static final String KEY_HASH = "hash";
     private static final String KEY_FAVORITES = "favorites";
+    private static final String KEY_FAILED_LOGINS = "failed_logins";
+    private static final String KEY_LOCK_UNTIL = "lock_until";
+    private static final String KEY_SECURITY_LOG = "security_log";
+    private static final int MAX_FAILED_LOGINS = 5;
+    private static final long LOGIN_LOCK_MS = 30_000L;
 
     private static final int BG = Color.rgb(3, 8, 18);
     private static final int PANEL = Color.rgb(8, 20, 35);
@@ -148,11 +153,29 @@ public class MainActivity extends Activity {
                 String savedUser = prefs.getString(KEY_USER, "");
                 String salt64 = prefs.getString(KEY_SALT, "");
                 String expected = prefs.getString(KEY_HASH, "");
+                long now = System.currentTimeMillis();
+                long lockUntil = prefs.getLong(KEY_LOCK_UNTIL, 0L);
+                if (now < lockUntil) {
+                    long seconds = Math.max(1L, (lockUntil - now + 999L) / 1000L);
+                    Toast.makeText(MainActivity.this, "Vault temporarily locked. Try again in " + seconds + " seconds.", Toast.LENGTH_LONG).show();
+                    return;
+                }
                 if (user != null && password != null && user.trim().equals(savedUser)
                         && verifyPassword(password, salt64, expected)) {
+                    prefs.edit().putInt(KEY_FAILED_LOGINS, 0).putLong(KEY_LOCK_UNTIL, 0L).apply();
+                    logSecurityEvent("Successful password unlock");
                     showHome();
                 } else {
-                    Toast.makeText(MainActivity.this, "Wrong username or password", Toast.LENGTH_SHORT).show();
+                    int attempts = prefs.getInt(KEY_FAILED_LOGINS, 0) + 1;
+                    SharedPreferences.Editor edit = prefs.edit().putInt(KEY_FAILED_LOGINS, attempts);
+                    if (attempts >= MAX_FAILED_LOGINS) {
+                        edit.putInt(KEY_FAILED_LOGINS, 0).putLong(KEY_LOCK_UNTIL, now + LOGIN_LOCK_MS);
+                        logSecurityEvent("5 failed login attempts — 30 second lockout");
+                    } else {
+                        logSecurityEvent("Failed login attempt " + attempts + " of " + MAX_FAILED_LOGINS);
+                    }
+                    edit.apply();
+                    Toast.makeText(MainActivity.this, attempts >= MAX_FAILED_LOGINS ? "Too many attempts. Vault locked for 30 seconds." : "Wrong username or password", Toast.LENGTH_SHORT).show();
                     if (webView != null) webView.evaluateJavascript("(function(){var t=document.getElementById('toast');if(t){t.textContent='INVALID LOGIN';t.classList.add('show');}})();", null);
                 }
             });
@@ -232,7 +255,7 @@ public class MainActivity extends Activity {
                     .build();
             prompt.authenticate(new CancellationSignal(), getMainExecutor(), new BiometricPrompt.AuthenticationCallback() {
                 @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
-                    runOnUiThread(MainActivity.this::showHome);
+                    runOnUiThread(() -> { logSecurityEvent("Successful biometric unlock"); showHome(); });
                 }
                 @Override public void onAuthenticationError(int errorCode, CharSequence errString) {
                     runOnUiThread(() -> Toast.makeText(MainActivity.this, errString, Toast.LENGTH_SHORT).show());
@@ -361,10 +384,37 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void logSecurityEvent(String event) {
+        String old = prefs.getString(KEY_SECURITY_LOG, "");
+        String entry = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+                .format(new java.util.Date()) + "  •  " + event;
+        String updated = entry + (old.isEmpty() ? "" : "\n" + old);
+        String[] lines = updated.split("\n");
+        StringBuilder bounded = new StringBuilder();
+        for (int i = 0; i < Math.min(lines.length, 50); i++) {
+            if (i > 0) bounded.append('\n');
+            bounded.append(lines[i]);
+        }
+        prefs.edit().putString(KEY_SECURITY_LOG, bounded.toString()).apply();
+    }
+
+    private void showSecurityLog() {
+        String log = prefs.getString(KEY_SECURITY_LOG, "");
+        new AlertDialog.Builder(this).setTitle("Security activity")
+                .setMessage(log.isEmpty() ? "No security events recorded yet." : log)
+                .setPositiveButton("CLOSE", null)
+                .setNeutralButton("CLEAR LOG", (d, w) -> {
+                    prefs.edit().remove(KEY_SECURITY_LOG).apply();
+                    Toast.makeText(this, "Security log cleared", Toast.LENGTH_SHORT).show();
+                }).show();
+    }
+
     private void renderSettings() {
         LinearLayout page = createPage("SECURITY SETTINGS", PURPLE);
         addRow(page, "🔑  Change master password", "Update your vault password", CYAN,
                 () -> showCredentialDialog(false), null);
+        addRow(page, "🛡️  Security activity log", "Review recent unlock and failed-login events", CYAN,
+                this::showSecurityLog, null);
         addRow(page, "🧹  Empty recycle bin", "Permanently remove items in Trash", RED,
                 () -> new AlertDialog.Builder(this).setTitle("Empty recycle bin?").setMessage("This permanently deletes everything in your vault trash.")
                         .setNegativeButton("CANCEL", null).setPositiveButton("EMPTY", (d,w) -> emptyTrash()).show(), null);
@@ -607,7 +657,7 @@ public class MainActivity extends Activity {
 
     @Override public void onBackPressed() {
         if(!unlocked){super.onBackPressed();return;}
-        if(currentSection.equals("home")){showLogin();return;}
+        if(currentSection.equals("home")){ logSecurityEvent("Vault manually locked"); showLogin(); return;}
         if(currentSection.equals("folder")){openSection("folders");return;}
         showHome();
     }
