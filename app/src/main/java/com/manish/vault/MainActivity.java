@@ -113,6 +113,8 @@ public class MainActivity extends Activity {
         notesRoot = new File(getFilesDir(), "VaultNotes");
         trashRoot = new File(getFilesDir(), "VaultTrash");
         vaultRoot.mkdirs(); notesRoot.mkdirs(); trashRoot.mkdirs();
+        try { getVaultKey(); } catch (Exception e) { logSecurityEvent("Encryption key initialization failed"); }
+        migratePlaintextFilesAsync();
         ensureEncryptionKey();
         migratePlaintextFilesAsync();
         if (!prefs.contains(KEY_HASH)) showCredentialDialog(true);
