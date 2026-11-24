@@ -3,7 +3,7 @@ name: Build Manish Vault 2.0 APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, manish-vault-2.0 ]
+    branches: [main, manish-vault-2.0]
 
 jobs:
   build:
@@ -19,7 +19,9 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android platform
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
