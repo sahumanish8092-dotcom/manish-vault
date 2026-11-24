@@ -1,19 +1,29 @@
-# Manish Vault — UI Preview 0.1
+# Manish Vault 2.0 Neon
 
-A responsive, offline-friendly front-end prototype for the Manish Vault Android app concept.
+Android application (native Java) with a black / electric-blue neon interface.
 
-## Included in this preview
-- Premium black-and-gold dashboard
-- Overview, My Files, Secret Notes, Passwords, Security Center screens
-- PIN creation/unlock gate (local demo only)
-- Add demo entries for files/notes/password records
-- Local browser persistence for preview records
+## Implemented in this version
 
-## Important security status
-This is a **visual and interaction prototype**, not a production secure vault. Preview records are stored in browser localStorage without encryption. Do not enter real passwords, private documents, or sensitive information. The PIN gate is only a demo gate and is not secure authentication. Biometric unlock, Android Keystore integration, AES-GCM encrypted file storage, safe file import/export, and audited backup/restore are not implemented yet.
+- Existing six-digit PIN hash is preserved for upgrades from the first Manish Vault build.
+- On first unlock after upgrade, a random 256-bit vault key is created and wrapped with a PIN-derived AES key. New installs do the same at PIN creation.
+- AES-256-GCM encryption for imported files and the local notes/password/file-index database.
+- Photos and videos: import via Android document picker, encrypted app-private storage, open/share decrypted temporary copies, delete.
+- Secure documents: same encrypted import/open/share/delete flow for PDFs and other file types.
+- Secret notes: create, edit, delete.
+- Password manager: create, edit, delete, reveal and copy. Clipboard contents are cleared after 30 seconds when they still match the copied password.
+- Security settings: change PIN (re-wraps the vault key) and configure auto-lock (30 seconds, 1 minute, 5 minutes, 10 minutes).
+- Temporary decrypted preview files are removed when the vault locks. Screenshots are blocked while this app is open.
+- Android Auto Backup is disabled.
 
-## Preview
-Open `index.html` in a modern browser. On Android, extract the ZIP and open the file in Chrome or serve the folder locally. The first launch asks you to create a demo PIN.
+## Build
 
-## Next Android packaging stage
-This ZIP is the reviewed UI prototype source. The next stage is to wrap this UI in a native Android WebView project and add native biometric/Keystore features. APK compilation requires Android SDK/Gradle tooling; it is not included as a prebuilt APK in this ZIP.
+The project uses Android Gradle Plugin 8.7.3, Gradle 8.9, Java 17, compile SDK 35 and AndroidX Core 1.13.1. The GitHub Actions workflow builds `app/build/outputs/apk/debug/app-debug.apk` and uploads it as `Manish-Vault-APK`.
+
+## Important security notes
+
+- Imported files are encrypted after selection. The original file in the phone's Photos/Downloads app is not deleted or changed.
+- Opening or sharing a file creates a temporary decrypted copy in this app's cache. It is deleted when the vault locks; a receiving app may make its own copy after sharing.
+- The vault is local to this app installation. There is no cloud sync or server-side recovery.
+- **Remember the PIN. If it is forgotten, encrypted vault data cannot be recovered.** Uninstalling or clearing app data also removes the local vault.
+- A six-digit PIN has limited entropy. Use a strong device lock as well, and do not treat this app as a substitute for a professionally audited password manager.
+- This source change has not been compiled or exercised on a physical Android device in this environment. Run the GitHub Actions build and then follow the device test checklist before relying on it for important data.
