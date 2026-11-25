@@ -325,6 +325,7 @@ public class MainActivity extends Activity {
             case "notes": renderNotes(); break;
             case "search": searchFiles(); break;
             case "settings": renderSettings(); break;
+            case "antitheft": renderAntiTheft(); break;
             case "about": renderAbout(); break;
             default: showHome(); break;
         }
@@ -496,6 +497,30 @@ public class MainActivity extends Activity {
                         .setNegativeButton("CANCEL", null).setPositiveButton("EMPTY", (d,w) -> emptyTrash()).show(), null);
         addRow(page, "🔒  Lock vault now", "Return to the secure login screen", PURPLE, this::showLogin, null);
         addRow(page, "📦  Storage location", "App-private storage: " + getFilesDir().getAbsolutePath(), MUTED, () -> {}, null);
+    }
+
+
+    private void renderAntiTheft() {
+        LinearLayout page = createPage("ANTI-THEFT SECURITY", RED);
+        addInfo(page, "STATUS", "Anti-Theft dashboard is available. Advanced monitoring is not active yet.");
+        addRow(page, "🔐  Emergency lock", "Lock Manish Vault immediately", CYAN, this::showLogin, null);
+        addRow(page, "📋  Security activity log", "Review failed and successful unlock events", CYAN, this::showSecurityLog, null);
+        addRow(page, "📍  Theft location alert", "Not configured — location consent and a secure alert service are required.", MUTED, () ->
+                new AlertDialog.Builder(this).setTitle("Not available yet")
+                        .setMessage("Location tracking and theft alerts are not implemented in this build. No location is being collected.")
+                        .setPositiveButton("OK", null).show(), null);
+        addRow(page, "🤳  Intruder selfie", "Not configured — camera capture and consent flow are not implemented.", MUTED, () ->
+                new AlertDialog.Builder(this).setTitle("Not available yet")
+                        .setMessage("Intruder selfie capture is not implemented. The app does not use the camera in the background.")
+                        .setPositiveButton("OK", null).show(), null);
+        addRow(page, "📱  SIM-change alert", "Not configured — SIM monitoring is not implemented.", MUTED, () ->
+                new AlertDialog.Builder(this).setTitle("Not available yet")
+                        .setMessage("SIM-change detection and alert delivery are not implemented in this build.")
+                        .setPositiveButton("OK", null).show(), null);
+        addRow(page, "🌐  Trusted-device remote lock", "Not configured — no remote service is connected.", MUTED, () ->
+                new AlertDialog.Builder(this).setTitle("Not available yet")
+                        .setMessage("Remote lock/wipe requires a secure backend and trusted-device setup, which are not configured.")
+                        .setPositiveButton("OK", null).show(), null);
     }
 
     private void renderAbout() {
