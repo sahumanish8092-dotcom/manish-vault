@@ -452,10 +452,26 @@ public class MainActivity extends Activity {
         try (FileInputStream in = new FileInputStream(f)) { return in.read(h) == h.length && Arrays.equals(h, ENCRYPTED_MAGIC); }
     }
     private void encryptStream(InputStream in, File dest) throws Exception {
-        byte[] iv = new byte[GCM_IV_BYTES]; new SecureRandom().nextBytes(iv); Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
-        c.init(Cipher.ENCRYPT_MODE, getVaultKey(), new GCMParameterSpec(GCM_TAG_BITS, iv));
-        try (FileOutputStream raw = new FileOutputStream(dest)) { raw.write(ENCRYPTED_MAGIC); raw.write(iv);
-            try (CipherOutputStream out = new CipherOutputStream(raw, c)) { byte[] b = new byte[16384]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); }
+        Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+        // AndroidKeyStore requires a provider-generated IV when randomized
+        // encryption is enforced. Never supply our own IV to ENCRYPT_MODE.
+        c.init(Cipher.ENCRYPT_MODE, getVaultKey());
+        byte[] iv = c.getIV();
+        if (iv == null || iv.length != GCM_IV_BYTES) {
+            throw new java.security.GeneralSecurityException("Could not generate a valid AES-GCM IV");
+        }
+        try (FileOutputStream raw = new FileOutputStream(dest)) {
+            raw.write(ENCRYPTED_MAGIC);
+            raw.write(iv);
+            try (CipherOutputStream out = new CipherOutputStream(raw, c)) {
+                byte[] b = new byte[16384];
+                int n;
+                while ((n = in.read(b)) != -1) out.write(b, 0, n);
+            }
+        } catch (Exception e) {
+            // Do not leave a partial/corrupt vault entry after a failed import.
+            if (dest.exists()) dest.delete();
+            throw e;
         }
     }
     private InputStream decryptingInput(File f) throws Exception {
