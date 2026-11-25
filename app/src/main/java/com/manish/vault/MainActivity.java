@@ -574,11 +574,30 @@ public class MainActivity extends Activity {
 
     private void launchImport(String mimeType) {
         pendingImportType = mimeType;
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType(mimeType);
+        Intent intent;
+        if ("image/*".equals(mimeType) || "video/*".equals(mimeType)) {
+            // On Android 13+ use the system Photo Picker where available.
+            if (Build.VERSION.SDK_INT >= 33) {
+                intent = new Intent("android.provider.action.PICK_IMAGES");
+                intent.setType(mimeType);
+            } else {
+                // Android 11 devices use the system content chooser, which can
+                // offer Gallery/Photos and other media providers without broad storage permission.
+                intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType(mimeType);
+            }
+        } else {
+            // General files continue to open through the document/file manager picker.
+            intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType(mimeType);
+        }
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try { startActivityForResult(intent, REQUEST_IMPORT); }
-        catch (ActivityNotFoundException e) { Toast.makeText(this,"No file picker is available",Toast.LENGTH_LONG).show(); }
+        try { startActivityForResult(Intent.createChooser(intent,
+                "image/*".equals(mimeType) ? "Select a photo" :
+                "video/*".equals(mimeType) ? "Select a video" : "Select a file"), REQUEST_IMPORT); }
+        catch (ActivityNotFoundException e) { Toast.makeText(this,"No compatible picker is available",Toast.LENGTH_LONG).show(); }
     }
 
     private void importUri(Uri uri, String type) {
